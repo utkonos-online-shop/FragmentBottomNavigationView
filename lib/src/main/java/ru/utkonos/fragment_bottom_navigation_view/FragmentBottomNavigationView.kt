@@ -12,11 +12,13 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import java.util.ArrayDeque
 import kotlin.math.abs
 
-sealed class CompleteBackStackEntry
+sealed class CompleteBackStackEntry {
+    abstract val tabId: Int
+}
 
-data class FragmentBackStackEntry(val id: Int) : CompleteBackStackEntry()
+data class FragmentBackStackEntry(val id: Int, override val tabId: Int) : CompleteBackStackEntry()
 
-data class TabBackStackEntry(val tabId: Int) : CompleteBackStackEntry()
+data class TabBackStackEntry(override val tabId: Int) : CompleteBackStackEntry()
 
 class FragmentBottomNavigationView @JvmOverloads constructor(
     context: Context,
@@ -39,7 +41,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
     private val completeBackStack = ArrayDeque<CompleteBackStackEntry>()
 
     private val onBackPressedCallback by lazy {
-        object : OnBackPressedCallback(false) {
+        object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() =
                 this@FragmentBottomNavigationView.handleOnBackPressed()
         }
@@ -56,13 +58,13 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
     fun initNavigation(
         fragmentManager: FragmentManager,
         containerId: Int = 0,
-        addSelectedTabsToBackStack: Boolean = false,
-        clearTabStackOnReselect: Boolean = false,
+        addSelectedItemsToBackStack: Boolean = false,
+        resetFragmentBackStackOnItemReselect: Boolean = false,
         tabFragmentFactory: (menuItemId: Int) -> Fragment?
     ) {
         this.fragmentManager = fragmentManager
-        this.addSelectedTabsToBackStack = addSelectedTabsToBackStack
-        this.clearTabStackOnReselect = clearTabStackOnReselect
+        this.addSelectedTabsToBackStack = addSelectedItemsToBackStack
+        this.clearTabStackOnReselect = resetFragmentBackStackOnItemReselect
         menu.forEach {
             val tabId = it.itemId
             val fragmentTag = getTabFragmentTag(tabId)
@@ -88,25 +90,23 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
                         commitNowAllowingStateLoss()
                     }
                 }
-            if (addSelectedTabsToBackStack) {
-                tabFragment?.initOnBackStackChangedListener()
-                activity.onBackPressedDispatcher.addCallback(onBackPressedCallback)
-            }
+            if (addSelectedItemsToBackStack)
+                tabFragment?.initOnBackStackChangedListener(tabId)
         }
     }
 
-    private fun Fragment.initOnBackStackChangedListener() {
+    private fun Fragment.initOnBackStackChangedListener(tabId: Int) {
         var lastTabBackStackIds = childFragmentManager.backStackIds
         childFragmentManager.addOnBackStackChangedListener {
             val newTabBackStackIds = childFragmentManager.backStackIds
             val sizeDelta = newTabBackStackIds.size - lastTabBackStackIds.size
             if (sizeDelta > 0)
                 newTabBackStackIds.takeLast(sizeDelta).forEach {
-                    completeBackStack.add(FragmentBackStackEntry(it))
+                    completeBackStack.add(FragmentBackStackEntry(it, tabId))
                 }
             else if (sizeDelta < 0)
                 lastTabBackStackIds.takeLast(abs(sizeDelta)).forEach {
-                    completeBackStack.removeLastOccurrence(FragmentBackStackEntry(it))
+                    completeBackStack.removeLastOccurrence(FragmentBackStackEntry(it, tabId))
                 }
             lastTabBackStackIds = newTabBackStackIds
             updateOnBackPressedCallback()
@@ -154,9 +154,9 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
     }
 
     private fun updateOnBackPressedCallback() {
-        onBackPressedCallback.isEnabled = completeBackStack.peekLast() is TabBackStackEntry
         onBackPressedCallback.remove()
-        activity.onBackPressedDispatcher.addCallback(onBackPressedCallback)
+        if (completeBackStack.peekLast() is TabBackStackEntry)
+            activity.onBackPressedDispatcher.addCallback(onBackPressedCallback)
     }
 
     private fun handleOnBackPressed() {

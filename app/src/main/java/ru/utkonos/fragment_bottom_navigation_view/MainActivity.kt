@@ -13,8 +13,8 @@ class MainActivity : AppCompatActivity() {
         bottom_navigation_view.initNavigation(
             fragmentManager = supportFragmentManager,
             containerId = R.id.container,
-            addSelectedTabsToBackStack = true,
-            clearTabStackOnReselect = true
+            addSelectedItemsToBackStack = true,
+            resetFragmentBackStackOnItemReselect = true
         ) {
             when (it) {
                 R.id.menu_item_home -> NavigationFragment { DestinationFragment.newInstance(R.string.tab_home) }

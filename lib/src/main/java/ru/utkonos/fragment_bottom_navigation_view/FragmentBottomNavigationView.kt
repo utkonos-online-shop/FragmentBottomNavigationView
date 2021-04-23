@@ -1,6 +1,7 @@
 package ru.utkonos.fragment_bottom_navigation_view
 
 import android.content.Context
+import android.os.Parcelable
 import android.util.AttributeSet
 import android.view.MenuItem
 import androidx.activity.OnBackPressedCallback
@@ -9,16 +10,23 @@ import androidx.databinding.BindingAdapter
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import java.util.ArrayDeque
+import com.google.android.material.bottomnavigation.BottomNavigationView.OnNavigationItemReselectedListener
+import com.google.android.material.bottomnavigation.BottomNavigationView.OnNavigationItemSelectedListener
+import kotlinx.android.parcel.Parcelize
+import kotlinx.android.parcel.RawValue
+import java.util.*
 import kotlin.math.abs
 
 sealed class CompleteBackStackEntry {
     abstract val tabId: Int
 }
 
-data class FragmentBackStackEntry(val id: Int, override val tabId: Int) : CompleteBackStackEntry()
+@Parcelize
+data class FragmentBackStackEntry(val id: Int, override val tabId: Int) : CompleteBackStackEntry(),
+    Parcelable
 
-data class TabBackStackEntry(override val tabId: Int) : CompleteBackStackEntry()
+@Parcelize
+data class TabBackStackEntry(override val tabId: Int) : CompleteBackStackEntry(), Parcelable
 
 class FragmentBottomNavigationView @JvmOverloads constructor(
     context: Context,
@@ -28,9 +36,9 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
 
     private lateinit var fragmentManager: FragmentManager
 
-    private var addSelectedTabsToBackStack = false
+    private var addSelectedItemsToBackStack = false
 
-    private var clearTabStackOnReselect = false
+    private var resetFragmentBackStackOnItemReselect = false
 
     private var outerOnNavigationItemSelectedListener: OnNavigationItemSelectedListener? = null
 
@@ -38,7 +46,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
 
     val selectedFragment: Fragment? get() = fragmentManager.primaryNavigationFragment
 
-    private val completeBackStack = ArrayDeque<CompleteBackStackEntry>()
+    private val completeBackStack by lazy { ArrayDeque<CompleteBackStackEntry>() }
 
     private val onBackPressedCallback by lazy {
         object : OnBackPressedCallback(true) {
@@ -63,8 +71,8 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
         tabFragmentFactory: (menuItemId: Int) -> Fragment?
     ) {
         this.fragmentManager = fragmentManager
-        this.addSelectedTabsToBackStack = addSelectedItemsToBackStack
-        this.clearTabStackOnReselect = resetFragmentBackStackOnItemReselect
+        this.addSelectedItemsToBackStack = addSelectedItemsToBackStack
+        this.resetFragmentBackStackOnItemReselect = resetFragmentBackStackOnItemReselect
         menu.forEach {
             val tabId = it.itemId
             val fragmentTag = getTabFragmentTag(tabId)
@@ -131,7 +139,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
                 setPrimaryNavigationFragment(it)
                 attach(it)
             }
-            if (addSelectedTabsToBackStack)
+            if (addSelectedItemsToBackStack)
                 runOnCommit {
                     if ((completeBackStack.peekLast() as? TabBackStackEntry)?.tabId == newTabId)
                         completeBackStack.pollLast()
@@ -145,7 +153,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
     }
 
     private fun onNavigationItemReselected(item: MenuItem) {
-        if (clearTabStackOnReselect) {
+        if (resetFragmentBackStackOnItemReselect) {
             selectedFragment?.childFragmentManager?.apply {
                 repeat(backStackEntryCount) { if (!isStateSaved) popBackStack() }
             }
@@ -168,6 +176,27 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
             activity.onBackPressed()
         }
     }
+
+    override fun onSaveInstanceState(): Parcelable = SavedState(
+        super.onSaveInstanceState(),
+        if (addSelectedItemsToBackStack) completeBackStack.toTypedArray() else null
+    )
+
+    override fun onRestoreInstanceState(state: Parcelable?) {
+        (state as? SavedState)?.let { savedState ->
+            super.onRestoreInstanceState(savedState.superState)
+            if (addSelectedItemsToBackStack) {
+                completeBackStack.clear()
+                completeBackStack.addAll(savedState.completeBackStack ?: emptyArray())
+            }
+        } ?: super.onRestoreInstanceState(null)
+    }
+
+    @Parcelize
+    private class SavedState(
+        val superState: Parcelable?,
+        val completeBackStack: @RawValue Array<CompleteBackStackEntry>?
+    ) : Parcelable
 
     companion object {
 

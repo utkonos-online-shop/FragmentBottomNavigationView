@@ -13,8 +13,8 @@ class MainActivity : AppCompatActivity() {
         bottom_navigation_view.initNavigation(
             fragmentManager = supportFragmentManager,
             containerId = R.id.container,
-            addSelectedItemsToBackStack = true,
-            resetFragmentBackStackOnItemReselect = true
+            onBackPressedBehaviour = FragmentBottomNavigationView.POP_CHILD_BACK_STACK or FragmentBottomNavigationView.SELECT_PREVIOUS_ITEM,
+            onItemReselectBehaviour = FragmentBottomNavigationView.CLEAR_CHILD_BACK_STACK
         ) {
             when (it) {
                 R.id.menu_item_home -> NavigationFragment { DestinationFragment.newInstance(R.string.tab_home) }

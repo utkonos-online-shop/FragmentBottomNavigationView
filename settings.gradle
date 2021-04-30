@@ -1,3 +1,5 @@
 include ':lib'
 include ':app'
 rootProject.name = "FragmentBottomNavigationView"
+include ':navigation'
+project(':navigation').projectDir = new File('/Users/artemij/AndroidStudioProjects/easy-navigation/lib')

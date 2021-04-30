@@ -5,6 +5,7 @@ import android.os.Parcelable
 import android.util.AttributeSet
 import android.view.MenuItem
 import androidx.activity.OnBackPressedCallback
+import androidx.annotation.IntDef
 import androidx.core.view.forEach
 import androidx.databinding.BindingAdapter
 import androidx.fragment.app.Fragment
@@ -28,6 +29,9 @@ data class FragmentBackStackEntry(val id: Int, override val tabId: Int) : Comple
 @Parcelize
 data class TabBackStackEntry(override val tabId: Int) : CompleteBackStackEntry(), Parcelable
 
+private const val TAB_FRAGMENT_TAG_PREFIX = "TabFragment"
+private const val TAB_FRAGMENT_TAG_PATTERN = "$TAB_FRAGMENT_TAG_PREFIX.*"
+
 class FragmentBottomNavigationView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -40,7 +44,8 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
 
     private var outerOnNavigationItemReselectedListener: OnNavigationItemReselectedListener? = null
 
-    val selectedFragment: Fragment? get() = fragmentManager.primaryNavigationFragment
+    val selectedFragment: Fragment?
+        get() = fragmentManager.findFragmentByTag(getTabFragmentTag(selectedItemId))
 
     private val completeBackStack by lazy { ArrayDeque<CompleteBackStackEntry>() }
 
@@ -55,6 +60,10 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
         }
     }
 
+    val canPerformOnBackPressed
+        get() = (canSetPrimaryNavigationFragment && selectedFragment?.childFragmentManager?.backStackEntryCount?.let { it > 0 } == true)
+            || (completeBackStackEnabled && completeBackStack.isNotEmpty())
+
     private var canSetPrimaryNavigationFragment = true
 
     private var clearChildBackStack = false
@@ -65,31 +74,42 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
         super.setOnNavigationItemReselectedListener(OnNavigationItemReselectedListener(::onNavigationItemReselected))
     }
 
-    private fun getTabFragmentTag(tabId: Int) = "TabFragment$tabId"
+    private fun getTabFragmentTag(tabId: Int) =
+        TAB_FRAGMENT_TAG_PATTERN.replace(".*", tabId.toString())
+
+    private fun getTabIdFromTabFragment(fragment: Fragment) =
+        fragment.tag?.substringAfter(TAB_FRAGMENT_TAG_PREFIX)?.toInt()
 
     fun initNavigation(
         fragmentManager: FragmentManager,
         containerId: Int = 0,
-        onBackPressedBehaviour: Int = POP_CHILD_BACK_STACK,
+        @OnBackPressedBehaviour
+        onBackPressedBehaviour: Int = POP_BACK_STACK_OF_SELECTED_FRAGMENT,
+        @OnItemReselectBehaviour
         onItemReselectBehaviour: Int = NONE,
         tabFragmentFactory: (menuItemId: Int) -> Fragment?
     ) {
         this.fragmentManager = fragmentManager
         canSetPrimaryNavigationFragment =
-            onBackPressedBehaviour and POP_CHILD_BACK_STACK == POP_CHILD_BACK_STACK
+            onBackPressedBehaviour and POP_BACK_STACK_OF_SELECTED_FRAGMENT == POP_BACK_STACK_OF_SELECTED_FRAGMENT
         completeBackStackEnabled =
             onBackPressedBehaviour and SELECT_PREVIOUS_ITEM == SELECT_PREVIOUS_ITEM
         addFragmentDestinationsToCompleteBackStack =
-            onBackPressedBehaviour == POP_CHILD_BACK_STACK or SELECT_PREVIOUS_ITEM
+            onBackPressedBehaviour == POP_BACK_STACK_OF_SELECTED_FRAGMENT or SELECT_PREVIOUS_ITEM
         clearChildBackStack =
-            onItemReselectBehaviour and CLEAR_CHILD_BACK_STACK == CLEAR_CHILD_BACK_STACK
+            onItemReselectBehaviour and CLEAR_BACK_STACK_OF_SELECTED_FRAGMENT == CLEAR_BACK_STACK_OF_SELECTED_FRAGMENT
+
+        val restoredSelectedItemId = fragmentManager.fragments
+            .lastOrNull { it.tag?.matches(TAB_FRAGMENT_TAG_PATTERN.toRegex()) == true }
+            ?.let(::getTabIdFromTabFragment)
+            ?: selectedItemId
 
         menu.forEach {
             val tabId = it.itemId
             val fragmentTag = getTabFragmentTag(tabId)
             val tabFragment =
                 fragmentManager.findFragmentByTag(fragmentTag)?.also { tabFragment ->
-                    if (tabId == selectedItemId) {
+                    if (tabId == restoredSelectedItemId) {
                         if (canSetPrimaryNavigationFragment && fragmentManager.primaryNavigationFragment !== tabFragment)
                             fragmentManager.beginTransaction()
                                 .setPrimaryNavigationFragment(tabFragment)
@@ -102,7 +122,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
                 } ?: tabFragmentFactory(tabId)?.also { tabFragment ->
                     with(fragmentManager.beginTransaction()) {
                         add(containerId, tabFragment, fragmentTag)
-                        if (tabId == selectedItemId) {
+                        if (tabId == restoredSelectedItemId) {
                             if (canSetPrimaryNavigationFragment)
                                 setPrimaryNavigationFragment(tabFragment)
                         } else {
@@ -117,6 +137,8 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
                     tabFragment?.initOnBackStackChangedListener(tabId)
             }
         }
+        fragmentManager.executePendingTransactions()
+        updatePrimaryNavigationFragment(true)
     }
 
     private fun Fragment.initOnBackStackChangedListener(tabId: Int) {
@@ -152,18 +174,19 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
         with(fragmentManager.beginTransaction()) {
             selectedFragment?.let { detach(it) }
             fragmentManager.findFragmentByTag(getTabFragmentTag(newTabId))?.let {
-                if (canSetPrimaryNavigationFragment)
-                    setPrimaryNavigationFragment(it)
+                if (canSetPrimaryNavigationFragment) setPrimaryNavigationFragment(it)
                 attach(it)
             }
-            if (completeBackStackEnabled)
-                runOnCommit {
+            runOnCommit {
+                updatePrimaryNavigationFragment(false)
+                if (completeBackStackEnabled) {
                     if ((completeBackStack.peekLast() as? TabBackStackEntry)?.tabId == newTabId)
                         completeBackStack.pollLast()
                     else
                         completeBackStack.add(TabBackStackEntry(oldTabId))
                     updateOnBackPressedCallback()
                 }
+            }
             commitAllowingStateLoss()
         }
         return true
@@ -175,6 +198,14 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
                 repeat(backStackEntryCount) { if (!isStateSaved) popBackStack() }
             }
         outerOnNavigationItemReselectedListener?.onNavigationItemReselected(item)
+    }
+
+    private fun updatePrimaryNavigationFragment(now: Boolean) {
+        if (!canSetPrimaryNavigationFragment)
+            with(fragmentManager.beginTransaction()) {
+                setPrimaryNavigationFragment(null)
+                if (now) commitNowAllowingStateLoss() else commitAllowingStateLoss()
+            }
     }
 
     private fun updateOnBackPressedCallback() {
@@ -208,6 +239,12 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
         } ?: super.onRestoreInstanceState(null)
     }
 
+    @IntDef(NONE, POP_BACK_STACK_OF_SELECTED_FRAGMENT, SELECT_PREVIOUS_ITEM, flag = true)
+    annotation class OnBackPressedBehaviour
+
+    @IntDef(NONE, CLEAR_BACK_STACK_OF_SELECTED_FRAGMENT)
+    annotation class OnItemReselectBehaviour
+
     @Parcelize
     private class SavedState(
         val superState: Parcelable?,
@@ -217,10 +254,10 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
     companion object {
 
         const val NONE = 1
-        const val POP_CHILD_BACK_STACK = 2
-        const val SELECT_PREVIOUS_ITEM = 4
+        const val POP_BACK_STACK_OF_SELECTED_FRAGMENT = 1 shl 1
+        const val SELECT_PREVIOUS_ITEM = 1 shl 2
 
-        const val CLEAR_CHILD_BACK_STACK = 2
+        const val CLEAR_BACK_STACK_OF_SELECTED_FRAGMENT = 2
 
         @JvmStatic
         @BindingAdapter("onNavigationItemSelectedListener")
@@ -233,7 +270,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
 
         @JvmStatic
         @BindingAdapter("onNavigationItemReselectedListener")
-        fun setOnNavigationItemReelectedListener(
+        fun setOnNavigationItemReselectedListener(
             view: FragmentBottomNavigationView,
             value: OnNavigationItemReselectedListener?
         ) {

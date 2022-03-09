@@ -60,6 +60,9 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
         }
     }
 
+    private var onBackStackChangedListeners: MutableList<FragmentManager.OnBackStackChangedListener> =
+        mutableListOf()
+
     val canPerformOnBackPressed
         get() = (canSetPrimaryNavigationFragment && selectedFragment?.childFragmentManager?.backStackEntryCount?.let { it > 0 } == true)
             || (completeBackStackEnabled && completeBackStack.isNotEmpty())
@@ -104,6 +107,7 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
             ?.let(::getTabIdFromTabFragment)
             ?: selectedItemId
 
+        clearFragmentBackStackListeners()
         menu.forEach {
             val tabId = it.itemId
             val fragmentTag = getTabFragmentTag(tabId)
@@ -133,8 +137,9 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
                 }
             if (completeBackStackEnabled) {
                 completeBackStack.clear()
-                if (addFragmentDestinationsToCompleteBackStack)
+                if (addFragmentDestinationsToCompleteBackStack) {
                     tabFragment?.initOnBackStackChangedListener(tabId)
+                }
             }
         }
         fragmentManager.executePendingTransactions()
@@ -143,7 +148,8 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
 
     private fun Fragment.initOnBackStackChangedListener(tabId: Int) {
         var lastTabBackStackIds = childFragmentManager.backStackIds
-        childFragmentManager.addOnBackStackChangedListener {
+
+        val onBackStackChangedListener = FragmentManager.OnBackStackChangedListener {
             val newTabBackStackIds = childFragmentManager.backStackIds
             val sizeDelta = newTabBackStackIds.size - lastTabBackStackIds.size
             if (sizeDelta > 0)
@@ -157,6 +163,59 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
             lastTabBackStackIds = newTabBackStackIds
             updateOnBackPressedCallback()
         }
+
+        childFragmentManager.addOnBackStackChangedListener(onBackStackChangedListener)
+
+        onBackStackChangedListeners.add(onBackStackChangedListener)
+    }
+
+    private fun getMenuFragmentsListWithTabId(): List<Pair<Fragment, Int>> {
+        val fragmentList = mutableListOf<Pair<Fragment, Int>>()
+        menu.forEach { menuItem ->
+            val tabId = menuItem.itemId
+            val fragmentTag = getTabFragmentTag(tabId)
+            fragmentManager.findFragmentByTag(fragmentTag)?.let {
+                fragmentList.add(it to tabId)
+            }
+        }
+
+        return fragmentList
+    }
+
+    private fun restoreFragmentBackStackListeners() {
+        clearFragmentBackStackListeners()
+        getMenuFragmentsListWithTabId().forEach {
+            val fragment = it.first
+            val tabId = it.second
+            if (completeBackStackEnabled) {
+                if (addFragmentDestinationsToCompleteBackStack) {
+                    fragment.initOnBackStackChangedListener(tabId)
+                }
+            }
+        }
+    }
+
+    private fun clearFragmentBackStackListeners() {
+        getMenuFragmentsListWithTabId().map { it.first }
+            .forEach { fragment ->
+                onBackStackChangedListeners.forEach {
+                    fragment.childFragmentManager.removeOnBackStackChangedListener(it)
+                }
+            }
+
+        onBackStackChangedListeners = mutableListOf()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        restoreFragmentBackStackListeners()
+        updateOnBackPressedCallback()
+    }
+
+    override fun onDetachedFromWindow() {
+        clearFragmentBackStackListeners()
+        clearOnBackPressedCallback()
+        super.onDetachedFromWindow()
     }
 
     override fun setOnNavigationItemSelectedListener(listener: OnNavigationItemSelectedListener?) {
@@ -209,9 +268,14 @@ class FragmentBottomNavigationView @JvmOverloads constructor(
     }
 
     private fun updateOnBackPressedCallback() {
-        onBackPressedCallback.remove()
-        if (completeBackStack.peekLast() is TabBackStackEntry)
+        clearOnBackPressedCallback()
+        if (completeBackStack.peekLast() is TabBackStackEntry) {
             activity.onBackPressedDispatcher.addCallback(onBackPressedCallback)
+        }
+    }
+
+    private fun clearOnBackPressedCallback() {
+        onBackPressedCallback.remove()
     }
 
     private fun handleOnBackPressed() {
